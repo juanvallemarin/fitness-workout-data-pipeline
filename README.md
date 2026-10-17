@@ -1,100 +1,104 @@
 # Fitness Workout Data Pipeline
 
-A lightweight automation project for collecting structured workout data from a REST API, transforming the JSON response and synchronizing it with Google Sheets.
+A compact, serverless data pipeline that retrieves nested workout JSON from a REST API, normalizes it into one Google Sheets row per exercise set, and prevents duplicate writes across repeated synchronizations.
 
-## Overview
+The repository is deliberately provider-neutral. Its endpoint, authentication example, and sample payload are synthetic; connecting a real service requires a provider-specific adapter that remains outside this public project.
 
-This project demonstrates an end-to-end data integration pipeline designed to run automatically without manual data entry.
+## What this project demonstrates
 
-The pipeline:
+- REST API integration with an example bearer-token flow.
+- Explicit HTTP-status, JSON-shape, and identifier validation.
+- Normalization of workouts, exercises, and sets into a stable tabular schema.
+- Deterministic synchronization keys for idempotent imports.
+- Concurrency-safe writes to Google Sheets with Apps Script locks.
+- Secret management through Apps Script Script Properties.
+- Optional time-driven Apps Script execution after manual validation.
+- Automated Node.js tests and continuous integration.
+- Operational, architecture, schema, and security documentation.
 
-1. Authenticates against a REST API.
-2. Retrieves workout data in JSON format.
-3. Extracts exercises, sets, repetitions, weights and timestamps.
-4. Transforms nested API responses into tabular records.
-5. Generates deterministic keys for duplicate detection.
-6. Writes new records to Google Sheets.
-7. Runs automatically on a scheduled trigger.
+## Data flow
 
-## Architecture
+```text
+REST API -> fetch and validate -> normalize nested JSON
+         -> build deterministic keys -> acquire script lock
+         -> verify sheet schema -> append only unseen rows
+```
 
-REST API  
-↓  
-Authentication & Session Handling  
-↓  
-JSON Workout Data  
-↓  
-Data Transformation  
-↓  
-Deduplication  
-↓  
-Google Sheets  
-↓  
-Scheduled Synchronization
+## Example input and output
 
-## Technologies
+An abbreviated synthetic input:
 
+```json
+{
+  "workouts": [
+    {
+      "id": "workout-demo-001",
+      "completedAt": "2026-10-17T08:30:00Z",
+      "exercises": [
+        {
+          "id": "exercise-demo-001",
+          "name": "Example press",
+          "sets": [{ "reps": 10, "weightKg": 25 }]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each set becomes one row:
+
+| workout_id | completed_at | exercise_id | exercise_name | set_number | reps | weight_kg | sync_key |
+| --- | --- | --- | --- | ---: | ---: | ---: | --- |
+| workout-demo-001 | 2026-10-17T08:30:00Z | exercise-demo-001 | Example press | 1 | 10 | 25 | workout-demo-001\|exercise-demo-001\|1\|10\|25 |
+
+The exact contract is documented in [DATA_SCHEMA.md](DATA_SCHEMA.md).
+
+## Reliability and idempotency
+
+The pipeline derives each `sync_key` from the workout ID, exercise ID, one-based set position, repetitions, and weight. Before appending, it loads existing keys from the sheet and filters both previously stored rows and duplicates in the current response. A script lock serializes competing executions. Repeating an unchanged synchronization therefore writes zero rows; a corrected measurement is retained as a new append-only record.
+
+Malformed identifiers, unexpected collection types, invalid JSON, unsuccessful HTTP responses, missing configuration, and incompatible sheet headers fail explicitly. Values equal to zero are preserved. Text that could be interpreted as a spreadsheet formula is escaped before writing.
+
+## Technology
+
+- Google Apps Script and Google Sheets
 - JavaScript
-- Google Apps Script
-- REST APIs
-- JSON
-- Google Sheets API / Spreadsheet Service
-- Time-driven automation
+- Node.js built-in test runner
+- GitHub Actions
 
-## Engineering Challenges
+## Testing
 
-The project addresses several practical integration problems:
+Run the complete local suite:
 
-- API authentication and session management
-- HTTP request handling
-- Nested JSON parsing
-- Data normalization
-- Idempotent synchronization
-- Duplicate prevention
-- Date/time handling
-- Automated scheduled execution
-- Error handling
+```bash
+node --test
+```
 
-## Data Model
+The tests cover normalization, zero-value preservation, empty nested collections, multiple workouts and exercises, deterministic key construction, duplicate filtering across repeated and concurrent runs, header creation and rejection, formula escaping, lock release, missing configuration, HTTP failures, invalid JSON, invalid response shapes, and ISO timestamp conversion.
 
-Each workout set can be stored as an individual structured record containing fields such as:
+The public suite uses test doubles and synthetic data. A real provider adapter still requires a manual two-run validation against an isolated test spreadsheet before any scheduled trigger is enabled.
 
-- workout identifier
-- workout timestamp
-- exercise identifier
-- exercise name
-- set number
-- repetitions
-- weight
-- calories
-- activity points
-- synchronization key
+## Setup
 
-## Privacy and Security
+Follow [SETUP.md](SETUP.md) to run the tests, create an isolated spreadsheet, add the Apps Script project, store secrets safely, adapt the provider boundary, and perform the two-run idempotency check.
 
-Credentials are never stored in source code.
+## Security and privacy
 
-Authentication information must be provided through secure configuration or script properties.
+Do not commit API credentials, cookies, spreadsheet IDs, private endpoints, or personal workout data. Store runtime configuration in Script Properties and review [SECURITY.md](SECURITY.md) before connecting a service.
 
-The public repository contains no personal workout data, account identifiers or proprietary API credentials.
+## Limitations
+
+- `https://api.example.com/v1/workouts` is a placeholder, not a live integration.
+- Bearer authentication is an example. Pagination, retries, rate-limit handling, token refresh, backfills, and provider-field mapping belong in the private adapter.
+- The destination is append-only; upstream corrections to already imported sets are not reconciled.
+- The Apps Script lock coordinates executions within one script project, not independent deployments.
+- The public eight-column schema intentionally excludes provider-specific aggregate metrics.
 
 ## Status
 
-Working prototype validated with real-world workout data.
-
-The public version is provider-neutral and intended to demonstrate the architecture and engineering approach rather than expose any private or proprietary integration.
+Version 1.0.0 is a provider-neutral reference implementation derived from a working personal automation. Private adapters, endpoints, credentials, and workout data are intentionally not included.
 
 ## License
 
-MIT
-
-## Running and testing
-
-Follow [SETUP.md](SETUP.md) to configure Apps Script and the destination worksheet.
-Run `node --test` locally (Node.js 22+) for regression tests; GitHub Actions runs
-the same command for pushes and pull requests.
-
-The public implementation uses bearer-token authentication and a single API request
-for the last 14 days. Provider-specific login, token refresh, pagination, retries,
-and historical backfills must be implemented for providers that require them.
-See [DATA_SCHEMA.md](DATA_SCHEMA.md) for append-only behavior and migration notes.
+The original code and documentation in this repository are licensed under the MIT License. Third-party APIs, trademarks, services, and user data are not covered by that license and remain subject to their respective terms.

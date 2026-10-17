@@ -29,6 +29,9 @@ function harness(options = {}) {
   };
   const context = vm.createContext({
     console: {log() {}},
+    PropertiesService: {getScriptProperties: () => ({
+      getProperty: key => (options.properties || {})[key] || null
+    })},
     LockService: {getScriptLock: () => ({
       tryLock: () => { events.push('lock'); return !options.busy; },
       releaseLock: () => events.push('release')
@@ -56,7 +59,31 @@ test('existing Apps Script transformation tests pass', () => {
 });
 test('sample produces five rows', () => {
   const sample = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'sample_workout.json'), 'utf8'));
-  assert.equal(harness().api.transformWorkouts(sample.workouts).length, 5);
+  const rows = harness().api.transformWorkouts(sample.workouts);
+  assert.equal(rows.length, 5);
+  assert.ok(rows.every(row => row.length === headers.length));
+  assert.notEqual(rows[0][7], rows[1][7]);
+});
+test('multiple workouts, exercises and sets preserve row order', () => {
+  const input = [
+    {id: 'w1', completedAt: '2026-10-16T08:00:00Z', exercises: [
+      {id: 'e1', name: 'Press', sets: [{reps: 8, weightKg: 20}, {reps: 6, weightKg: 22}]},
+      {id: 'e2', name: 'Row', sets: [{reps: 10, weightKg: 25}]}
+    ]},
+    {id: 'w2', exercises: [{id: 'e3', sets: [{reps: 12}]}]}
+  ];
+  const rows = harness().api.transformWorkouts(input);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(Array.from(rows, row => row[0]), ['w1', 'w1', 'w1', 'w2']);
+  assert.deepEqual(Array.from(rows, row => row[4]), [1, 2, 1, 1]);
+  assert.equal(rows[3][3], '');
+  assert.equal(rows[3][6], '');
+});
+test('empty and missing nested collections produce no rows', () => {
+  const {api} = harness();
+  assert.equal(api.transformWorkouts([]).length, 0);
+  assert.equal(api.transformWorkouts([{id: 'w'}]).length, 0);
+  assert.equal(api.transformWorkouts([{id: 'w', exercises: [{id: 'e'}]}]).length, 0);
 });
 test('zero values survive and differ from missing values', () => {
   const {api} = harness();
@@ -72,6 +99,13 @@ test('invalid identities fail before persistence', () => {
   assert.throws(() => api.transformWorkouts(null), /array/);
   assert.throws(() => api.transformWorkouts([{}]), /Workout ID/);
   assert.throws(() => api.transformWorkouts([{id: 'w', exercises: [{}]}]), /Exercise ID/);
+  assert.throws(() => api.transformWorkouts([{id: 'bad|id'}]), /must not contain/);
+  assert.throws(() => api.transformWorkouts([{id: 'w', exercises: {}}]), /must be an array/);
+  assert.throws(() => api.transformWorkouts([{id: 'w', exercises: [{id: 'e', sets: [null]}]}]), /object/);
+});
+test('missing configuration is reported without exposing secrets', () => {
+  const {api} = harness({properties: {FITNESS_API_TOKEN: 'secret'}});
+  assert.throws(() => api.synchronizeWorkouts(), /SPREADSHEET_ID/);
 });
 test('initializes headers and deduplicates within and between executions', () => {
   const {api, data, events} = harness();
@@ -100,14 +134,27 @@ test('lock is released after sheet and write errors', () => {
     assert.equal(events.at(-1), 'release');
   }
 });
-test('formula-like exercise names are written as literal text', () => {
+test('formula-like strings are written as literal text without mutating input rows', () => {
+  for (const prefix of ['=', '+', '-', '@']) {
+    const {api, data} = harness();
+    const input = workout();
+    input[0].exercises[0].name = prefix + 'formula';
+    const rows = api.transformWorkouts(input);
+    api.writeNewRows('sheet', rows);
+    assert.equal(data[1][3], "'" + prefix + 'formula');
+    assert.equal(rows[0][3], prefix + 'formula');
+  }
+});
+test('formula-like identifiers remain idempotent after escaping', () => {
   const {api, data} = harness();
-  const input = workout();
-  input[0].exercises[0].name = '=1+1';
-  const rows = api.transformWorkouts(input);
-  api.writeNewRows('sheet', rows);
-  assert.equal(data[1][3], "'=1+1");
-  assert.equal(rows[0][3], '=1+1');
+  const rows = api.transformWorkouts([{id: '=workout', exercises: [
+    {id: '+exercise', sets: [{reps: 1, weightKg: 0}]}
+  ]}]);
+  assert.equal(api.writeNewRows('sheet', rows), 1);
+  assert.equal(api.writeNewRows('sheet', rows), 0);
+  assert.equal(data.length, 2);
+  assert.equal(data[1][0], "'=workout");
+  assert.equal(data[1][7], "'=workout|+exercise|1|1|0");
 });
 test('invalid API responses are rejected; empty arrays are valid', () => {
   for (const body of ['{}', 'null', '{"workouts":{}}', 'invalid']) {
@@ -115,4 +162,14 @@ test('invalid API responses are rejected; empty arrays are valid', () => {
   }
   assert.equal(harness().api.fetchWorkouts('token').length, 0);
   assert.throws(() => harness({status: 401}).api.fetchWorkouts('token'), /HTTP 401/);
+});
+test('ISO timestamps omit milliseconds', () => {
+  const {api} = harness();
+  assert.equal(api.toIsoSeconds(new Date('2026-10-17T08:09:10.123Z')), '2026-10-17T08:09:10Z');
+});
+test('row schema is validated before sheet access', () => {
+  const {api, events} = harness();
+  assert.throws(() => api.writeNewRows('sheet', [['incomplete']]), /schema/);
+  assert.throws(() => api.writeNewRows('sheet', null), /array/);
+  assert.deepEqual(events, []);
 });

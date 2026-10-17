@@ -1,0 +1,12 @@
+.env
+.env.*
+credentials.json
+secrets.json
+.clasp.json
+*.log
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+node_modules/
+coverage/

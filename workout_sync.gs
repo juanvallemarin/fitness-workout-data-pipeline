@@ -11,14 +11,21 @@ const CONFIG = {
 
 const HEADERS = ['workout_id', 'completed_at', 'exercise_id', 'exercise_name',
   'set_number', 'reps', 'weight_kg', 'sync_key'];
+const SYNC_KEY_INDEX = HEADERS.indexOf('sync_key');
+const SYNC_KEY_SHEET_COLUMN = SYNC_KEY_INDEX + 1;
 
 function synchronizeWorkouts() {
   const properties = PropertiesService.getScriptProperties();
   const apiToken = properties.getProperty('FITNESS_API_TOKEN');
   const spreadsheetId = properties.getProperty('SPREADSHEET_ID');
-  if (!apiToken || !spreadsheetId) throw new Error('Missing required configuration.');
+  const missing = [];
+  if (!apiToken) missing.push('FITNESS_API_TOKEN');
+  if (!spreadsheetId) missing.push('SPREADSHEET_ID');
+  if (missing.length) {
+    throw new Error('Missing required Script Properties: ' + missing.join(', ') + '.');
+  }
   const rows = transformWorkouts(fetchWorkouts(apiToken));
-  writeNewRows(spreadsheetId, rows);
+  return writeNewRows(spreadsheetId, rows);
 }
 
 function fetchWorkouts(apiToken) {
@@ -32,7 +39,12 @@ function fetchWorkouts(apiToken) {
   });
   if (response.getResponseCode() !== 200)
     throw new Error('API request failed with HTTP ' + response.getResponseCode());
-  const payload = JSON.parse(response.getContentText());
+  let payload;
+  try {
+    payload = JSON.parse(response.getContentText());
+  } catch (error) {
+    throw new Error('API returned invalid JSON.');
+  }
   if (!payload || !Array.isArray(payload.workouts)) {
     throw new Error('API response must contain a workouts array.');
   }
@@ -43,23 +55,43 @@ function transformWorkouts(workouts) {
   if (!Array.isArray(workouts)) throw new Error('Workouts must be an array.');
   const rows = [];
   workouts.forEach(function(workout) {
-    if (!workout || workout.id == null || workout.id === '') {
-      throw new Error('Workout ID is required.');
-    }
-    (workout.exercises || []).forEach(function(exercise) {
-      if (!exercise || exercise.id == null || exercise.id === '') {
-        throw new Error('Exercise ID is required.');
-      }
-      (exercise.sets || []).forEach(function(set, index) {
-        const key = [workout.id, exercise.id, index + 1,
-          set.reps == null ? '' : set.reps, set.weightKg == null ? '' : set.weightKg].join('|');
-        rows.push([workout.id || '', workout.completedAt || '',
-          exercise.id || '', exercise.name || '', index + 1,
-          set.reps == null ? '' : set.reps, set.weightKg == null ? '' : set.weightKg, key]);
+    assertIdentifier(workout && workout.id, 'Workout');
+    arrayOrEmpty(workout.exercises, 'Workout exercises').forEach(function(exercise) {
+      assertIdentifier(exercise && exercise.id, 'Exercise');
+      arrayOrEmpty(exercise.sets, 'Exercise sets').forEach(function(set, index) {
+        if (!set || typeof set !== 'object') throw new Error('Set must be an object.');
+        const setNumber = index + 1;
+        const reps = valueOrBlank(set.reps);
+        const weightKg = valueOrBlank(set.weightKg);
+        const key = buildSyncKey(workout.id, exercise.id, setNumber, reps, weightKg);
+        rows.push([workout.id, valueOrBlank(workout.completedAt),
+          exercise.id, valueOrBlank(exercise.name), setNumber,
+          reps, weightKg, key]);
       });
     });
   });
   return rows;
+}
+
+function assertIdentifier(value, label) {
+  if (value == null || value === '') throw new Error(label + ' ID is required.');
+  if (String(value).indexOf('|') !== -1) {
+    throw new Error(label + ' ID must not contain "|".');
+  }
+}
+
+function arrayOrEmpty(value, label) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw new Error(label + ' must be an array.');
+  return value;
+}
+
+function valueOrBlank(value) {
+  return value == null ? '' : value;
+}
+
+function buildSyncKey(workoutId, exerciseId, setNumber, reps, weightKg) {
+  return [workoutId, exerciseId, setNumber, reps, weightKg].join('|');
 }
 
 /**
@@ -67,6 +99,12 @@ function transformWorkouts(workouts) {
  * The append-only key retains the existing format for nonzero records.
  */
 function writeNewRows(spreadsheetId, rows) {
+  if (!Array.isArray(rows)) throw new Error('Rows must be an array.');
+  rows.forEach(function(row) {
+    if (!Array.isArray(row) || row.length !== HEADERS.length || !row[SYNC_KEY_INDEX]) {
+      throw new Error('Each row must match the documented schema and contain a sync key.');
+    }
+  });
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(30000)) throw new Error('Another synchronization is running.');
   try {
@@ -84,16 +122,14 @@ function writeNewRows(spreadsheetId, rows) {
       }
     }
     const existingKeys = new Set(lastRow > 1
-      ? sheet.getRange(2, 8, lastRow - 1, 1).getValues().flat() : []);
-    const newRows = rows.filter(function(row) {
-      if (existingKeys.has(row[7])) return false;
-      existingKeys.add(row[7]);
+      ? sheet.getRange(2, SYNC_KEY_SHEET_COLUMN, lastRow - 1, 1).getValues().flat() : []);
+    const safeRows = rows.map(function(row) {
+      return row.map(escapeSpreadsheetValue);
+    });
+    const newRows = safeRows.filter(function(row) {
+      if (existingKeys.has(row[SYNC_KEY_INDEX])) return false;
+      existingKeys.add(row[SYNC_KEY_INDEX]);
       return true;
-    }).map(function(row) {
-      // Spreadsheet Service interprets strings starting with "=" as formulas.
-      return row.map(function(value) {
-        return typeof value === 'string' && value.startsWith('=') ? "'" + value : value;
-      });
     });
     if (newRows.length) {
       sheet.getRange(lastRow + 1, 1, newRows.length, HEADERS.length).setValues(newRows);
@@ -105,6 +141,11 @@ function writeNewRows(spreadsheetId, rows) {
   } finally {
     lock.releaseLock();
   }
+}
+
+function escapeSpreadsheetValue(value) {
+  // Prevent provider-controlled strings from being interpreted as formulas.
+  return typeof value === 'string' && /^[=+\-@]/.test(value) ? "'" + value : value;
 }
 
 function toIsoSeconds(date) {
