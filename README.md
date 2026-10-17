@@ -87,3 +87,14 @@ The public version is provider-neutral and intended to demonstrate the architect
 ## License
 
 MIT
+
+## Running and testing
+
+Follow [SETUP.md](SETUP.md) to configure Apps Script and the destination worksheet.
+Run `node --test` locally (Node.js 22+) for regression tests; GitHub Actions runs
+the same command for pushes and pull requests.
+
+The public implementation uses bearer-token authentication and a single API request
+for the last 14 days. Provider-specific login, token refresh, pagination, retries,
+and historical backfills must be implemented for providers that require them.
+See [DATA_SCHEMA.md](DATA_SCHEMA.md) for append-only behavior and migration notes.

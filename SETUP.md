@@ -27,3 +27,17 @@ The sample implementation writes:
 ## Important
 
 Do not commit credentials, access tokens, personal workout data, private spreadsheet IDs or proprietary API details.
+
+## Sheet initialization and validation
+
+Leave the worksheet empty on the first run: the script creates the eight headers
+listed in DATA_SCHEMA.md. Existing sheets must have exactly those names in A1:H1,
+in that order. Rename existing headers before running the updated script; a
+mismatch stops synchronization without appending data.
+
+## Local verification
+
+Install Node.js 22 or later, then run `node --test` from the repository root.
+No npm dependencies or Google credentials are needed. The tests use in-memory
+Apps Script service doubles; authorize and verify a manual run against a test
+spreadsheet before enabling a production trigger.
