@@ -1,0 +1,42 @@
+{
+  "workouts": [
+    {
+      "id": "workout-demo-001",
+      "completedAt": "2026-10-15T18:20:26Z",
+      "exercises": [
+        {
+          "id": "exercise-demo-001",
+          "name": "Chest Press",
+          "sets": [
+            {
+              "reps": 12,
+              "weightKg": 30
+            },
+            {
+              "reps": 12,
+              "weightKg": 30
+            },
+            {
+              "reps": 10,
+              "weightKg": 32
+            }
+          ]
+        },
+        {
+          "id": "exercise-demo-002",
+          "name": "Lat Pulldown",
+          "sets": [
+            {
+              "reps": 12,
+              "weightKg": 40
+            },
+            {
+              "reps": 12,
+              "weightKg": 40
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
